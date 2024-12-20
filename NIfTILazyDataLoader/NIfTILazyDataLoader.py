@@ -1,16 +1,16 @@
 import logging
 import os
-from pathlib import Path
 import re
+from pathlib import Path
+from typing import Iterable, Optional, Union
 
-import slicer
-from slicer.ScriptedLoadableModule import *
 import ctk
+import numpy as np
 import qt
 import SimpleITK as sitk
 import sitkUtils
-import numpy as np
-from typing import Iterable, Optional, Union
+import slicer
+from slicer.ScriptedLoadableModule import *
 
 logging.basicConfig(level=logging.INFO)
 
@@ -57,14 +57,18 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
 
         # ComboBox for Configuration Options
         self.configComboBox = qt.QComboBox()
-        self.configComboBox.addItems(["nnUNet dataset", "Patient/Images & Labels", "2 independent directories"])
+        self.configComboBox.addItems(
+            ["nnUNet dataset", "Patient/Images & Labels", "2 independent directories"]
+        )
         self.configComboBox.setToolTip("Select the directory type.")
         self.configComboBox.currentIndexChanged.connect(self.onComboBoxChanged)
         configMenuLayout.addWidget(qt.QLabel("Directory Type:"))
         configMenuLayout.addWidget(self.configComboBox)
         # Create a group box to hold the radio buttons
         self.modeGroupBox = qt.QGroupBox("Mode")
-        self.modeGroupBox.setEnabled(self.configComboBox.currentText == "nnUNet dataset")
+        self.modeGroupBox.setEnabled(
+            self.configComboBox.currentText == "nnUNet dataset"
+        )
         modeLayout = qt.QHBoxLayout(self.modeGroupBox)
         self.trainRadioButton = qt.QRadioButton("Train")
         testRadioButton = qt.QRadioButton("Test")
@@ -79,13 +83,19 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         # Create a form layout for the labeled line edits
         regexFormLayout = qt.QFormLayout()
         self.imagesRegexLineEdit = qt.QLineEdit()
-        self.imagesRegexLineEdit.text = "^\w+_(?P<modality>(?!seg\.nii\.gz$)\w{1,5})\.nii\.gz$"
+        self.imagesRegexLineEdit.text = (
+            "^\w+_(?P<modality>(?!seg\.nii\.gz$)\w{1,5})\.nii\.gz$"
+        )
         self.labelsRegexLineEdit = qt.QLineEdit()
         self.labelsRegexLineEdit.text = "^\w+_seg\.nii\.gz$"
         regexFormLayout.addRow("Images regex:", self.imagesRegexLineEdit)
         regexFormLayout.addRow("Labels regex:", self.labelsRegexLineEdit)
-        self.imagesRegexLineEdit.setEnabled(self.configComboBox.currentText != "nnUNet dataset")
-        self.labelsRegexLineEdit.setEnabled(self.configComboBox.currentText != "nnUNet dataset")
+        self.imagesRegexLineEdit.setEnabled(
+            self.configComboBox.currentText != "nnUNet dataset"
+        )
+        self.labelsRegexLineEdit.setEnabled(
+            self.configComboBox.currentText != "nnUNet dataset"
+        )
         # Add the form layout to the main configuration layout
         configMenuLayout.addLayout(regexFormLayout)
         self.layout.addLayout(configMenuLayout)
@@ -98,10 +108,16 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         imageDirectoryInputLayout.addWidget(imageDirectoryLabel)
         # Directory path input
         self.imageDirectoryPathEdit = ctk.ctkPathLineEdit()
-        self.imageDirectoryPathEdit.filters = ctk.ctkPathLineEdit.Dirs  # Allow only directories
-        self.imageDirectoryPathEdit.setToolTip("Select a directory containing the files.")
+        self.imageDirectoryPathEdit.filters = (
+            ctk.ctkPathLineEdit.Dirs
+        )  # Allow only directories
+        self.imageDirectoryPathEdit.setToolTip(
+            "Select a directory containing the files."
+        )
         self.imageDirectoryPathEdit.showHistoryButton = False  # Enable history button
-        self.imageDirectoryPathEdit.currentPathChanged.connect(self.onDirectoryPathEditSelected)
+        self.imageDirectoryPathEdit.currentPathChanged.connect(
+            self.onDirectoryPathEditSelected
+        )
         imageDirectoryInputLayout.addWidget(self.imageDirectoryPathEdit)
         self.layout.addLayout(imageDirectoryInputLayout)
 
@@ -113,18 +129,26 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         labelDirectoryInputLayout.addWidget(labelDirectoryLabel)
         # Directory path input
         self.labelDirectoryPathEdit = ctk.ctkPathLineEdit()
-        self.labelDirectoryPathEdit.filters = ctk.ctkPathLineEdit.Dirs  # Allow only directories
-        self.labelDirectoryPathEdit.setToolTip("Select a directory containing the labels.")
+        self.labelDirectoryPathEdit.filters = (
+            ctk.ctkPathLineEdit.Dirs
+        )  # Allow only directories
+        self.labelDirectoryPathEdit.setToolTip(
+            "Select a directory containing the labels."
+        )
         self.labelDirectoryPathEdit.showHistoryButton = False  # Enable history button
-        self.labelDirectoryPathEdit.currentPathChanged.connect(self.onDirectoryPathEditSelected)
-        self.labelDirectoryPathEdit.setEnabled(self.configComboBox.currentText == "2 independent directories")
+        self.labelDirectoryPathEdit.currentPathChanged.connect(
+            self.onDirectoryPathEditSelected
+        )
+        self.labelDirectoryPathEdit.setEnabled(
+            self.configComboBox.currentText == "2 independent directories"
+        )
         labelDirectoryInputLayout.addWidget(self.labelDirectoryPathEdit)
         self.layout.addLayout(labelDirectoryInputLayout)
-        
+
         # Button to search directory
         self.searchDirectoryButton = qt.QPushButton("Search Directory")
         self.layout.addWidget(self.searchDirectoryButton)
-        self.searchDirectoryButton.connect('clicked(bool)', self.search_directory)
+        self.searchDirectoryButton.connect("clicked(bool)", self.search_directory)
 
         # File List View
         self.layout.addWidget(qt.QLabel("Available cases:"))
@@ -135,23 +159,25 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         # Button to load
         self.loadButton = qt.QPushButton("Load")
         self.layout.addWidget(self.loadButton)
-        self.loadButton.connect('clicked(bool)', self.onLoadButton)
+        self.loadButton.connect("clicked(bool)", self.onLoadButton)
 
         # Horizontal layout for previous and next buttons
         previousNextButtonLayout = qt.QHBoxLayout()
         # Button to load previous images
         self.previousButton = qt.QPushButton("Previous")
-        self.previousButton.connect('clicked(bool)', self.onPreviousButton)
+        self.previousButton.connect("clicked(bool)", self.onPreviousButton)
         previousNextButtonLayout.addWidget(self.previousButton)
         # Button to load next images
         self.nextButton = qt.QPushButton("Next")
-        self.nextButton.connect('clicked(bool)', self.onNextButton)
+        self.nextButton.connect("clicked(bool)", self.onNextButton)
         previousNextButtonLayout.addWidget(self.nextButton)
         self.layout.addLayout(previousNextButtonLayout)
 
         self.layout.addWidget(qt.QLabel("Current case:"))
         self.sceneTreeView = slicer.qMRMLSubjectHierarchyTreeView()
-        self.sceneTreeView.setMRMLScene(slicer.mrmlScene)  # Tree view for displaying loaded nodes
+        self.sceneTreeView.setMRMLScene(
+            slicer.mrmlScene
+        )  # Tree view for displaying loaded nodes
         self.layout.addWidget(self.sceneTreeView)
 
         self.availableCases = {}
@@ -172,7 +198,9 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
                 return
             self.navigate_folder_patient()
         elif self.configComboBox.currentText == "2 independent directories":
-            if (self.imageDirectoryPathEdit.currentPath == "") or (self.labelDirectoryPathEdit.currentPath == ""):
+            if (self.imageDirectoryPathEdit.currentPath == "") or (
+                self.labelDirectoryPathEdit.currentPath == ""
+            ):
                 return
             self.navigate_folder_two_directories()
 
@@ -184,12 +212,16 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         Navigate provided images and labels directories.
         """
         try:
-            suffix = "Tr" if self.trainRadioButton.isChecked() else "Ts" 
-            images_path = Path(self.imageDirectoryPathEdit.currentPath) / f"images{suffix}"
-            labels_path = Path(self.imageDirectoryPathEdit.currentPath) / f"labels{suffix}"
+            suffix = "Tr" if self.trainRadioButton.isChecked() else "Ts"
+            images_path = (
+                Path(self.imageDirectoryPathEdit.currentPath) / f"images{suffix}"
+            )
+            labels_path = (
+                Path(self.imageDirectoryPathEdit.currentPath) / f"labels{suffix}"
+            )
             cases = []
             for label in labels_path.iterdir():
-                case_id = label.name.split('.')[0]
+                case_id = label.name.split(".")[0]
                 logging.debug(f"Looking for images for Case ID: {case_id}")
                 images = list(images_path.glob(f"{case_id}*"))
                 if images:
@@ -205,7 +237,7 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
             logging.info(f"Added {len(cases)} cases.")
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to navigate input directory: {str(e)}")
-    
+
     def navigate_folder_patient(self):
         """
         Navigate provided directory in Patient/Images & Labels structure.
@@ -312,7 +344,6 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
             self.fileListWidget.setCurrentRow(current_row + 1)
         self.load_selected_case()
 
-
     def onPreviousButton(self):
         """Move to the previous item in the file list."""
         current_row = self.fileListWidget.currentRow
@@ -325,7 +356,15 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         self.availableCases = {}
         self.fileListWidget.clear()
 
-        self.modeGroupBox.setEnabled(self.configComboBox.currentText == "nnUNet dataset")
-        self.labelDirectoryPathEdit.setEnabled(self.configComboBox.currentText == "2 independent directories")
-        self.imagesRegexLineEdit.setEnabled(self.configComboBox.currentText == "Patient/Images & Labels")
-        self.labelsRegexLineEdit.setEnabled(self.configComboBox.currentText == "Patient/Images & Labels")
+        self.modeGroupBox.setEnabled(
+            self.configComboBox.currentText == "nnUNet dataset"
+        )
+        self.labelDirectoryPathEdit.setEnabled(
+            self.configComboBox.currentText == "2 independent directories"
+        )
+        self.imagesRegexLineEdit.setEnabled(
+            self.configComboBox.currentText == "Patient/Images & Labels"
+        )
+        self.labelsRegexLineEdit.setEnabled(
+            self.configComboBox.currentText == "Patient/Images & Labels"
+        )
