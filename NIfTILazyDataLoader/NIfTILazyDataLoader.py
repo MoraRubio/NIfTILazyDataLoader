@@ -79,9 +79,9 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         # Create a form layout for the labeled line edits
         regexFormLayout = qt.QFormLayout()
         self.imagesRegexLineEdit = qt.QLineEdit()
-        self.imagesRegexLineEdit.text = "^.*_(?P<case_id>\d+)_(?P<modality>\w+|?!seg)\.nii\.gz$"
+        self.imagesRegexLineEdit.text = "^\w+_(?P<modality>(?!seg\.nii\.gz$)\w{1,5})\.nii\.gz$"
         self.labelsRegexLineEdit = qt.QLineEdit()
-        self.labelsRegexLineEdit.text = "^.*_(?P<case_id>\d+)_seg\.nii\.gz$" 
+        self.labelsRegexLineEdit.text = "^\w+_seg\.nii\.gz$"
         regexFormLayout.addRow("Images regex:", self.imagesRegexLineEdit)
         regexFormLayout.addRow("Labels regex:", self.labelsRegexLineEdit)
         self.imagesRegexLineEdit.setEnabled(self.configComboBox.currentText != "nnUNet dataset")
@@ -101,7 +101,7 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         self.imageDirectoryPathEdit.filters = ctk.ctkPathLineEdit.Dirs  # Allow only directories
         self.imageDirectoryPathEdit.setToolTip("Select a directory containing the files.")
         self.imageDirectoryPathEdit.showHistoryButton = False  # Enable history button
-        self.imageDirectoryPathEdit.currentPathChanged.connect(self.onDirectorySelected)
+        self.imageDirectoryPathEdit.currentPathChanged.connect(self.onDirectoryPathEditSelected)
         imageDirectoryInputLayout.addWidget(self.imageDirectoryPathEdit)
         self.layout.addLayout(imageDirectoryInputLayout)
 
@@ -116,7 +116,7 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         self.labelDirectoryPathEdit.filters = ctk.ctkPathLineEdit.Dirs  # Allow only directories
         self.labelDirectoryPathEdit.setToolTip("Select a directory containing the labels.")
         self.labelDirectoryPathEdit.showHistoryButton = False  # Enable history button
-        self.labelDirectoryPathEdit.currentPathChanged.connect(self.onDirectorySelected)
+        self.labelDirectoryPathEdit.currentPathChanged.connect(self.onDirectoryPathEditSelected)
         self.labelDirectoryPathEdit.setEnabled(self.configComboBox.currentText == "2 independent directories")
         labelDirectoryInputLayout.addWidget(self.labelDirectoryPathEdit)
         self.layout.addLayout(labelDirectoryInputLayout)
@@ -160,24 +160,23 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         """
         Populate the file list widget with filenames from the selected directory.
         """
+        logging.debug("Searching directory...")
+        self.availableCases = {}
         self.fileListWidget.clear()
         if self.configComboBox.currentText == "nnUNet dataset":
-            if not self.imageDirectoryPathEdit.currentPath:
+            if self.imageDirectoryPathEdit.currentPath == "":
                 return
             self.navigate_folder_nnunet()
         elif self.configComboBox.currentText == "Patient/Images & Labels":
-            if not self.imageDirectoryPathEdit.currentPath:
+            if self.imageDirectoryPathEdit.currentPath == "":
                 return
             self.navigate_folder_patient()
-        elif self.configComboBox.currentText == "Patient/Images & Labels":
-            if (not self.imageDirectoryPathEdit.currentPath) and (not self.labelDirectoryPathEdit.currentPath):
+        elif self.configComboBox.currentText == "2 independent directories":
+            if (self.imageDirectoryPathEdit.currentPath == "") or (self.labelDirectoryPathEdit.currentPath == ""):
                 return
-            self.navigate_folder_nnunet()
+            self.navigate_folder_two_directories()
 
-    def onDirectorySelected(self, path):
-        """
-        Populate the file list widget with filenames from the selected directory.
-        """
+    def onDirectoryPathEditSelected(self, path):
         self.search_directory()
 
     def navigate_folder_nnunet(self):
@@ -202,8 +201,7 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
                     }
                 else:
                     logging.debug(f"No images for Case ID: {case_id}")
-            for case in sorted(cases):
-                self.fileListWidget.addItem(case)
+            self.fileListWidget.addItems(sorted(cases))
             logging.info(f"Added {len(cases)} cases.")
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to navigate input directory: {str(e)}")
@@ -220,7 +218,7 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
             dir_path = Path(self.imageDirectoryPathEdit.currentPath)
             cases = []
             for patient in dir_path.iterdir():
-                if patient.name.startswith("."):
+                if (not patient.is_dir()) or patient.name.startswith("."):
                     continue
                 case_id = patient.name
                 logging.debug(f"Looking for images for Case ID: {case_id}")
@@ -228,11 +226,11 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
                 images = []
                 label = None
                 for file in files:
-                    if (not file.is_dir()) or file.name.startswith("."):
+                    if file.name.startswith("."):
                         continue
                     if re.match(self.imagesRegexLineEdit.text, file.name):
                         images.append(file)
-                    elif re.match(self.labelsRegexLineEdit.text, file.name):
+                    if re.match(self.labelsRegexLineEdit.text, file.name):
                         label = file
                 if images:
                     logging.debug(f"Found {len(images)} images for Case ID: {case_id}")
@@ -242,8 +240,37 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
                         "label": label,
                     }
                 else:
+                    logging.debug(f"No images found for Case ID: {case_id}")
+                if not label:
+                    logging.warning(f"No label found for Case ID: {case_id}")
+            self.fileListWidget.addItems(sorted(cases))
+            logging.info(f"Added {len(cases)} cases.")
+        except Exception as e:
+            slicer.util.errorDisplay(f"Failed to navigate input directory: {str(e)}")
+
+    def navigate_folder_two_directories(self):
+        """
+        Navigate provided directories. Filenames for images and labels must match.
+        """
+        try:
+            images_path = Path(self.imageDirectoryPathEdit.currentPath)
+            labels_path = Path(self.labelDirectoryPathEdit.currentPath)
+            cases = []
+            for label in labels_path.iterdir():
+                if label.name.startswith("."):
+                    continue
+                case_id = label.name.split(".")[0]
+                logging.debug(f"Looking for image for Case ID: {case_id}")
+                image = images_path / label.name
+                if image.exists():
+                    logging.debug(f"Found image for Case ID: {case_id}")
+                    cases.append(case_id)
+                    self.availableCases[case_id] = {
+                        "images": [image],
+                        "label": label,
+                    }
+                else:
                     logging.debug(f"No images for Case ID: {case_id}")
-                break
             self.fileListWidget.addItems(sorted(cases))
             logging.info(f"Added {len(cases)} cases.")
         except Exception as e:
@@ -255,18 +282,22 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         """
         slicer.mrmlScene.Clear(0)
         selected_item = self.fileListWidget.selectedItems()[0]
-        logging.debug(f"Selected item: {selected_item}")
-        images = self.availableCases[selected_item.text()]["images"]
-        label = self.availableCases[selected_item.text()]["label"]
+        case_id = selected_item.text()
+        logging.debug(f"Selected case: {case_id}")
+        images = self.availableCases[case_id]["images"]
+        label = self.availableCases[case_id]["label"]
         for image in images:
             try:
                 img_node = slicer.util.loadVolume(image)
             except Exception as e:
                 slicer.util.errorDisplay(f"Failed to load image {image}: {str(e)}")
-        try:
-            seg_node = slicer.util.loadNodeFromFile(label, "SegmentationFile")
-        except Exception as e:
-            slicer.util.errorDisplay(f"Failed to load label {label}: {str(e)}")
+        if label:
+            try:
+                seg_node = slicer.util.loadSegmentation(label)
+            except Exception as e:
+                slicer.util.errorDisplay(f"Failed to load label {label}: {str(e)}")
+        else:
+            logging.info(f"No label for Case ID: {case_id}")
 
     def onLoadButton(self):
         """
@@ -285,13 +316,16 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
     def onPreviousButton(self):
         """Move to the previous item in the file list."""
         current_row = self.fileListWidget.currentRow
-        if current_row < 0:  # Ensure not at the last item
+        if current_row > 0:  # Ensure not at the last item
             self.fileListWidget.setCurrentRow(current_row - 1)
         self.load_selected_case()
 
     def onComboBoxChanged(self):
-        # Retrieve the text or value that determines the logic
-        self.labelDirectoryPathEdit.setEnabled(self.configComboBox.currentText == "2 independent directories")
+        slicer.mrmlScene.Clear(0)
+        self.availableCases = {}
+        self.fileListWidget.clear()
+
         self.modeGroupBox.setEnabled(self.configComboBox.currentText == "nnUNet dataset")
-        self.imagesRegexLineEdit.setEnabled(self.configComboBox.currentText != "nnUNet dataset")
-        self.labelsRegexLineEdit.setEnabled(self.configComboBox.currentText != "nnUNet dataset")
+        self.labelDirectoryPathEdit.setEnabled(self.configComboBox.currentText == "2 independent directories")
+        self.imagesRegexLineEdit.setEnabled(self.configComboBox.currentText == "Patient/Images & Labels")
+        self.labelsRegexLineEdit.setEnabled(self.configComboBox.currentText == "Patient/Images & Labels")
