@@ -1,3 +1,4 @@
+import csv
 import logging
 import os
 import re
@@ -22,13 +23,13 @@ logging.basicConfig(level=logging.INFO)
 class NIfTILazyDataLoader(ScriptedLoadableModule):
     def __init__(self, parent):
         """
-        Initialize the MRIAnnotator module.
+        Initialize the NIfTILazyDataLoader module.
 
         Parameters:
         - parent: The parent module.
         """
         parent.title = "NIfTI Lazy DataLoader"
-        parent.categories = ["Machine Learning"]
+        parent.categories = ["Utilities"]
         parent.contributors = ["Alejandro Mora-Rubio ()"]
         self.parent = parent
 
@@ -58,7 +59,12 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         # ComboBox for Configuration Options
         self.configComboBox = qt.QComboBox()
         self.configComboBox.addItems(
-            ["nnUNet dataset", "Patient/Images & Labels", "2 independent directories"]
+            [
+                "nnUNet dataset",
+                "Patient/Images & Labels",
+                "2 independent directories",
+                "Comma-Separated Values (CSV) file",
+            ]
         )
         self.configComboBox.setToolTip("Select the directory type.")
         self.configComboBox.currentIndexChanged.connect(self.onComboBoxChanged)
@@ -91,13 +97,36 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         regexFormLayout.addRow("Images regex:", self.imagesRegexLineEdit)
         regexFormLayout.addRow("Labels regex:", self.labelsRegexLineEdit)
         self.imagesRegexLineEdit.setEnabled(
-            self.configComboBox.currentText != "nnUNet dataset"
+            self.configComboBox.currentText == "Patient/Images & Labels"
         )
         self.labelsRegexLineEdit.setEnabled(
-            self.configComboBox.currentText != "nnUNet dataset"
+            self.configComboBox.currentText == "Patient/Images & Labels"
         )
         # Add the form layout to the main configuration layout
         configMenuLayout.addLayout(regexFormLayout)
+
+        # Create a form layout for the labeled line edits
+        colNamesFormLayout = qt.QFormLayout()
+        self.idColNameLineEdit = qt.QLineEdit()
+        self.idColNameLineEdit.text = "Patient"
+        self.imagesColNameLineEdit = qt.QLineEdit()
+        self.imagesColNameLineEdit.text = "Image"
+        self.labelsColNameLineEdit = qt.QLineEdit()
+        self.labelsColNameLineEdit.text = "Mask"
+        colNamesFormLayout.addRow("ID Column Name:", self.idColNameLineEdit)
+        colNamesFormLayout.addRow("Images Column Name:", self.imagesColNameLineEdit)
+        colNamesFormLayout.addRow("Labels Column Name:", self.labelsColNameLineEdit)
+        self.idColNameLineEdit.setEnabled(
+            self.configComboBox.currentText == "Comma-Separated Values (CSV) file"
+        )
+        self.imagesColNameLineEdit.setEnabled(
+            self.configComboBox.currentText == "Comma-Separated Values (CSV) file"
+        )
+        self.labelsColNameLineEdit.setEnabled(
+            self.configComboBox.currentText == "Comma-Separated Values (CSV) file"
+        )
+        # Add the form layout to the main configuration layout
+        configMenuLayout.addLayout(colNamesFormLayout)
         self.layout.addLayout(configMenuLayout)
 
         # Horizontal layout for label and directory input
@@ -117,6 +146,9 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         self.imageDirectoryPathEdit.showHistoryButton = False  # Enable history button
         self.imageDirectoryPathEdit.currentPathChanged.connect(
             self.onDirectoryPathEditSelected
+        )
+        self.imageDirectoryPathEdit.setEnabled(
+            self.configComboBox.currentText != "Comma-Separated Values (CSV) file"
         )
         imageDirectoryInputLayout.addWidget(self.imageDirectoryPathEdit)
         self.layout.addLayout(imageDirectoryInputLayout)
@@ -144,6 +176,31 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         )
         labelDirectoryInputLayout.addWidget(self.labelDirectoryPathEdit)
         self.layout.addLayout(labelDirectoryInputLayout)
+
+        csvFileInputLayout = qt.QHBoxLayout()
+        # Label widget
+        csvFileLabel = qt.QLabel("CSV file:")
+        csvFileLabel.setToolTip(
+            "Select a file containing the paths to the images an masks."
+        )
+        csvFileInputLayout.addWidget(csvFileLabel)
+        # Directory path input
+        self.csvFilePathEdit = ctk.ctkPathLineEdit()
+        self.csvFilePathEdit.filters = (
+            ctk.ctkPathLineEdit.Files
+        )  # Allow only directories
+        self.csvFilePathEdit.setToolTip(
+            "Select a file containing the paths to the images an masks."
+        )
+        self.csvFilePathEdit.showHistoryButton = False  # Enable history button
+        self.csvFilePathEdit.currentPathChanged.connect(
+            self.onDirectoryPathEditSelected
+        )
+        self.csvFilePathEdit.setEnabled(
+            self.configComboBox.currentText == "Comma-Separated Values (CSV) file"
+        )
+        csvFileInputLayout.addWidget(self.csvFilePathEdit)
+        self.layout.addLayout(csvFileInputLayout)
 
         # Button to search directory
         self.searchDirectoryButton = qt.QPushButton("Search Directory")
@@ -203,6 +260,10 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
             ):
                 return
             self.navigate_folder_two_directories()
+        elif self.configComboBox.currentText == "Comma-Separated Values (CSV) file":
+            if self.csvFilePathEdit.currentPath == "":
+                return
+            self.load_csv_file()
 
     def onDirectoryPathEditSelected(self, path):
         self.search_directory()
@@ -308,6 +369,34 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to navigate input directory: {str(e)}")
 
+    def load_csv_file(self):
+        """
+        Load CSV file with paths to images and labels.
+        """
+        try:
+            with open(Path(self.csvFilePathEdit.currentPath), "r") as csvfile:
+                reader = csv.DictReader(csvfile)
+                cases = []
+                for row in reader:
+                    case_id = row[self.idColNameLineEdit.text]
+                    image = row[self.imagesColNameLineEdit.text]
+                    label = row[self.labelsColNameLineEdit.text]
+                    if Path(image).exists():
+                        logging.debug(f"Found image for Case ID: {case_id}")
+                        cases.append(case_id)
+                        self.availableCases[case_id] = {
+                            "images": [image],
+                            "label": label,
+                        }
+                    else:
+                        logging.debug(
+                            f"No images for Case ID: {case_id}. Image path: {image}. Mask path: {label}."
+                        )
+                self.fileListWidget.addItems(sorted(cases))
+                logging.info(f"Added {len(cases)} cases.")
+        except Exception as e:
+            slicer.util.errorDisplay(f"Failed to load CSV file: {str(e)}")
+
     def load_selected_case(self):
         """
         Load the selected files into 3D Slicer.
@@ -359,6 +448,9 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         self.modeGroupBox.setEnabled(
             self.configComboBox.currentText == "nnUNet dataset"
         )
+        self.imageDirectoryPathEdit.setEnabled(
+            self.configComboBox.currentText != "Comma-Separated Values (CSV) file"
+        )
         self.labelDirectoryPathEdit.setEnabled(
             self.configComboBox.currentText == "2 independent directories"
         )
@@ -367,4 +459,16 @@ class NIfTILazyDataLoaderWidget(ScriptedLoadableModuleWidget):
         )
         self.labelsRegexLineEdit.setEnabled(
             self.configComboBox.currentText == "Patient/Images & Labels"
+        )
+        self.idColNameLineEdit.setEnabled(
+            self.configComboBox.currentText == "Comma-Separated Values (CSV) file"
+        )
+        self.imagesColNameLineEdit.setEnabled(
+            self.configComboBox.currentText == "Comma-Separated Values (CSV) file"
+        )
+        self.labelsColNameLineEdit.setEnabled(
+            self.configComboBox.currentText == "Comma-Separated Values (CSV) file"
+        )
+        self.csvFilePathEdit.setEnabled(
+            self.configComboBox.currentText == "Comma-Separated Values (CSV) file"
         )
